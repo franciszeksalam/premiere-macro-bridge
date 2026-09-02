@@ -1,0 +1,30 @@
+{
+  "port": 48777,
+  "presets": {
+    "smoothZoom": {
+      "premiereName": "smooth zoom"
+    },
+    "scalePopBounceIn": {
+      "premiereName": "TEXT PRESET - Scale POP Bounce IN"
+    }
+  },
+  "sfx": {
+    "whoosh01": {
+      "path": ""
+    }
+  },
+  "hotkeys": [
+    {
+      "key": "1",
+      "modifiers": ["control", "option"],
+      "action": "applyPreset",
+      "id": "scalePopBounceIn"
+    },
+    {
+      "key": "2",
+      "modifiers": ["control", "option"],
+      "action": "insertSfx",
+      "id": "whoosh01"
+    }
+  ]
+}
