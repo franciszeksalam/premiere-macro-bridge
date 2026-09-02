@@ -1,79 +1,86 @@
-# Premiere Macro Bridge (private local MVP)
+# Premiere Macro Bridge
 
-Local-only macOS hotkeys for Adobe Premiere Pro 2026:
+Private, local-only macOS bridge for Adobe Premiere Pro 2026.
 
-- `Control + Option + 1` -> saved Premiere preset selected in `config.json`
-- `Control + Option + 2` -> SFX `whoosh01` at the playhead
+Flow:
 
-Architecture: Carbon global hotkey helper -> `127.0.0.1:48777` -> invisible CEP extension -> ExtendScript/QE DOM -> Premiere timeline.
+`Ulanzi shortcut -> Carbon global hotkey -> 127.0.0.1:48777 -> invisible CEP -> ExtendScript/QE -> Premiere`
 
-## Setup
+Current mappings:
+
+- `Control + Option + 1` -> `applyEffect:gaussianBlur`
+- `Control + Option + 2` -> `insertSfx:whoosh01`
+- `Control + Option + 3` -> `insertMogrt:questionBox`
+
+Saved user presets are intentionally out of scope. The active code does not parse `.prfpset`, reconstruct presets, or automate drag-and-drop.
+
+## Install
 
 ```sh
 ./scripts/install-local.sh
 ```
 
-Restart Premiere Pro after the first install. The CEP extension is copied into the per-user CEP directory, is invisible, and starts on Premiere application activation; no panel focus is required. It reads the live `config.json` from this repository on every action.
-
-This machine already has CEP PlayerDebugMode enabled. The setup script deliberately does not change that global Adobe preference.
-
-Health check:
-
-```sh
-./scripts/status.sh
-```
-
-Direct bridge checks (do not replace the real hotkey E2E test):
-
-```sh
-./scripts/action.sh applyPreset smoothZoom
-./scripts/action.sh applyPreset scalePopBounceIn
-./scripts/action.sh insertSfx whoosh01
-```
-
-Logs:
-
-- `~/Library/Logs/PremiereMacroBridge/hotkeys.log`
-- `~/Library/Logs/PremiereMacroBridge/cep.log`
-- `~/Library/Logs/PremiereMacroBridge/launchagent.out.log`
-- `~/Library/Logs/PremiereMacroBridge/launchagent.err.log`
-
-## Config
-
-Edit `config.json`. Preset and SFX action logic is generic; new buttons are data entries.
-
-Before SFX testing, set an absolute WAV path:
-
-```json
-"sfx": {
-  "whoosh01": {
-    "path": "/absolute/path/to/whoosh.wav"
-  }
-}
-```
-
-Restart the hotkey helper after changing `hotkeys` or `port`:
+Restart Premiere after changing CEP or ExtendScript files. Changes to media paths in `config.json` are read on each request; changes to hotkey mappings require restarting the LaunchAgent:
 
 ```sh
 launchctl kickstart -k gui/$UID/com.local.premieremacrobridge.hotkeys
 ```
 
-Preset/SFX paths are re-read by CEP for every action, so changing only those values does not require a restart.
+Health and logs:
+
+```sh
+./scripts/status.sh
+tail -f ~/Library/Logs/PremiereMacroBridge/hotkeys.log
+tail -f ~/Library/Logs/PremiereMacroBridge/cep.log
+```
+
+The HTTP server binds only to `127.0.0.1:48777`.
+
+## Config
+
+Actions are data-driven. Add an entry under `effects`, `sfx`, or `mogrts`, then add a matching entry to `hotkeys`.
+
+Built-in effects use the exact Premiere catalog name. MOGRT entries require a conservative `durationSeconds`; this lets the bridge verify that the whole destination range is free before insertion.
+
+```json
+{
+  "effects": {
+    "gaussianBlur": { "premiereName": "Gaussian Blur" }
+  },
+  "sfx": {
+    "whoosh01": { "path": "/absolute/path/to/file.wav" }
+  },
+  "mogrts": {
+    "questionBox": {
+      "path": "/absolute/path/to/template.mogrt",
+      "durationSeconds": 15
+    }
+  }
+}
+```
+
+## Behavior
+
+### Built-in effect
+
+`applyEffect` requires a selected video clip. ExtendScript resolves the exact built-in effect through QE, locates the QE counterpart of the selected TrackItem, calls `addVideoEffect`, then verifies that the expected component was added. No UI focus is required.
+
+### SFX
+
+The bridge reads the playhead, reuses an existing ProjectItem by canonical media path or imports the WAV, measures its duration, and calls `findFirstFreeAudioTrackAtTime(time, duration)`. A track is free only when no clip overlaps the complete insertion range. It uses `overwriteClip` only after that check and verifies the inserted start ticks.
+
+### MOGRT
+
+The bridge calls Premiere's `Sequence.importMGT(path, ticks, videoTrackIndex, audioTrackIndex)`. `findFirstFreeVideoTrackAtTime(time, duration)` and the audio equivalent validate the complete configured duration before insertion. The returned TrackItem start and duration are verified afterward.
+
+If no existing track is safe, the bridge returns `NO_FREE_AUDIO_TRACK` or `NO_FREE_VIDEO_TRACK`; it does not create tracks or overwrite existing clips.
 
 ## Ulanzi Studio
 
-Create two keyboard-shortcut actions:
+Create three keyboard shortcut buttons using macOS Control and Option, not Command:
 
-1. Preset button: macOS `Control` + `Option` + `1` (not Command). On this laptop it maps to `TEXT PRESET - Scale POP Bounce IN`.
-2. SFX button: macOS `Control` + `Option` + `2`.
+1. `Control + Option + 1` — Gaussian Blur
+2. `Control + Option + 2` — test WAV
+3. `Control + Option + 3` — Question Box MOGRT
 
-The Ulanzi device only emits the shortcut. It does not need awareness of CEP or Premiere.
-
-## Known constraints
-
-- Applying saved Effects Presets is not in Premiere's supported scripting DOM. The bridge first checks the private QE catalog. Premiere 26 does not expose user presets there, so the working fallback locates the exact case-sensitive name in the active profile's `Effect Presets and Custom Items.prfpset`, adds each underlying effect through QE, and copies its values and keyframes through ExtendScript.
-- The preset must actually exist in the active Premiere profile and be visible under Effects > Presets.
-- On this laptop `Control + Option + 1` is currently mapped to the available test preset `TEXT PRESET - Scale POP Bounce IN`; change its config `id` back to `smoothZoom` when that preset exists here.
-- The `.prfpset` fallback covers ordinary component values and keyframes. Premiere's public property API does not expose every saved Bezier tangent/influence field, so unusually complex presets may require a small compatibility adjustment or keyboard UI automation.
-- CEP 12 / ExtendScript still works in Premiere Pro 2026, but Adobe has superseded CEP for new extensions. This local bridge intentionally favors today's shortest working path.
-- SFX placement uses `overwriteClip` only after checking that the complete SFX interval is free. If no existing audio track is free, QE adds a stereo audio track at the end.
+The Ulanzi device only emits the key combinations. It does not need to know about CEP or Premiere.

@@ -52,7 +52,7 @@ PMB.findClipCoordinates = function (seq, candidate) {
   return null;
 };
 
-PMB.findSelectedVideoClip = function (seq) {
+PMB.findSelectedVideoClip = function (seq, allowPlayheadFallback) {
   var selection, i, located;
   try { selection = seq.getSelection(); } catch (ignore) { selection = []; }
   for (i = 0; i < selection.length; i++) {
@@ -66,6 +66,8 @@ PMB.findSelectedVideoClip = function (seq) {
       }
     } catch (ignoreCandidate) {}
   }
+
+  if (allowPlayheadFallback !== true) return null;
 
   var playhead = PMB.ticks(seq.getPlayerPosition());
   for (var trackIndex = seq.videoTracks.numTracks - 1; trackIndex >= 0; trackIndex--) {
@@ -134,7 +136,7 @@ PMB.componentSnapshot = function (clip) {
   return out;
 };
 
-PMB.findQEPreset = function (premiereName) {
+PMB.findQEVideoEffect = function (premiereName) {
   var exact = null;
   try { exact = qe.project.getVideoEffectByName(premiereName); } catch (ignoreDirect) {}
   try { if (exact && String(exact.name) === premiereName) return exact; } catch (ignoreExactName) {}
@@ -151,263 +153,67 @@ PMB.findQEPreset = function (premiereName) {
   return null;
 };
 
-PMB.xmlObjectById = function (xml, objectId) {
-  var children = xml.children();
-  for (var i = 0; i < children.length(); i++) {
-    var id = "";
-    try { id = String(children[i].@ObjectID); } catch (ignoreId) {}
-    if (id === String(objectId)) return children[i];
-  }
-  return null;
-};
-
-PMB.xmlTag = function (node, tagName) {
-  if (!node) return "";
-  var children = node.children();
-  for (var i = 0; i < children.length(); i++) {
-    try {
-      if (String(children[i].name().localName) === tagName) return String(children[i]);
-    } catch (ignoreName) {}
-  }
-  return "";
-};
-
-PMB.parsePresetValue = function (raw) {
-  var value = String(raw === undefined || raw === null ? "" : raw);
-  if (value === "true") return true;
-  if (value === "false") return false;
-  if (value.indexOf(":") >= 0) {
-    var parts = value.split(":");
-    var point = [];
-    for (var i = 0; i < parts.length; i++) point.push(Number(parts[i]));
-    return point;
-  }
-  var number = Number(value);
-  return isNaN(number) ? value : number;
-};
-
-PMB.parseKeyframeRecord = function (record) {
-  var fields = String(record).split(",");
-  if (fields.length < 2) return null;
-  return {
-    ticks: Number(fields[0]),
-    value: PMB.parsePresetValue(fields[1]),
-    interpolation: fields.length > 2 ? Number(fields[2]) : 0
-  };
-};
-
-PMB.parsePresetParameter = function (node, index) {
-  var start = PMB.xmlTag(node, "StartKeyframe");
-  var startRecord = start ? PMB.parseKeyframeRecord(start) : null;
-  var keyframes = [];
-  var rawKeyframes = PMB.xmlTag(node, "Keyframes");
-  if (rawKeyframes) {
-    var records = rawKeyframes.split(";");
-    for (var i = 0; i < records.length; i++) {
-      if (!records[i]) continue;
-      var parsed = PMB.parseKeyframeRecord(records[i]);
-      if (parsed) keyframes.push(parsed);
-    }
-  }
-  return {
-    index: index,
-    name: PMB.xmlTag(node, "Name"),
-    parameterId: PMB.xmlTag(node, "ParameterID"),
-    timeVarying: PMB.xmlTag(node, "IsTimeVarying") === "true",
-    startValue: startRecord ? startRecord.value : null,
-    keyframes: keyframes
-  };
-};
-
-PMB.parsePresetXml = function (file, premiereName) {
-  if (!file || !file.exists || !file.open("r")) return null;
-  var contents = "";
-  try {
-    file.encoding = "UTF-8";
-    contents = file.read();
-  } finally {
-    try { file.close(); } catch (ignoreClose) {}
-  }
-  var xml = new XML(contents);
-  var treeItems = xml.TreeItem;
-  var dataRef = "";
-  for (var i = 0; i < treeItems.length(); i++) {
-    if (String(treeItems[i].TreeItemBase.Name) === premiereName) {
-      dataRef = String(treeItems[i].TreeItemBase.Data.@ObjectRef);
-      break;
-    }
-  }
-  if (!dataRef) return null;
-  var presetItem = PMB.xmlObjectById(xml, dataRef);
-  if (!presetItem) return null;
-  var presetRefs = presetItem.FilterPresets.FilterPreset;
-  var definition = { name: premiereName, file: file.fsName, effects: [] };
-  for (var presetIndex = 0; presetIndex < presetRefs.length(); presetIndex++) {
-    var presetRef = String(presetRefs[presetIndex].@ObjectRef);
-    var filterPreset = PMB.xmlObjectById(xml, presetRef);
-    if (!filterPreset) continue;
-    var componentRef = String(filterPreset.Component.@ObjectRef);
-    var componentNode = PMB.xmlObjectById(xml, componentRef);
-    if (!componentNode) continue;
-    var effect = {
-      anchorInTicks: Number(String(filterPreset.AnchorInPoint)),
-      anchorOutTicks: Number(String(filterPreset.AnchorOutPoint)),
-      matchName: PMB.xmlTag(filterPreset, "FilterMatchName") || PMB.xmlTag(componentNode, "MatchName"),
-      displayName: String(componentNode.Component.DisplayName),
-      instanceName: String(componentNode.Component.InstanceName),
-      parameters: []
-    };
-    var paramRefs = componentNode.Component.Params.Param;
-    for (var paramIndex = 0; paramIndex < paramRefs.length(); paramIndex++) {
-      var paramNode = PMB.xmlObjectById(xml, String(paramRefs[paramIndex].@ObjectRef));
-      if (paramNode) effect.parameters.push(PMB.parsePresetParameter(paramNode, Number(String(paramRefs[paramIndex].@Index))));
-    }
-    definition.effects.push(effect);
-  }
-  return definition.effects.length ? definition : null;
-};
-
-PMB.findSavedPresetDefinition = function (premiereName) {
-  var premiereRoot = new Folder(Folder.myDocuments.fsName + "/Adobe/Premiere Pro");
-  if (!premiereRoot.exists) return null;
-  var major = String(app.version || "").split(".")[0];
-  var versionFolder = new Folder(premiereRoot.fsName + "/" + major + ".0");
-  var versions = versionFolder.exists ? [versionFolder] : premiereRoot.getFiles(function (entry) { return entry instanceof Folder; });
-  for (var versionIndex = 0; versionIndex < versions.length; versionIndex++) {
-    var profiles = versions[versionIndex].getFiles(function (entry) { return entry instanceof Folder && String(entry.name).indexOf("Profile-") === 0; });
-    for (var profileIndex = 0; profileIndex < profiles.length; profileIndex++) {
-      var presetFile = new File(profiles[profileIndex].fsName + "/Effect Presets and Custom Items.prfpset");
-      if (!presetFile.exists) continue;
-      try {
-        var definition = PMB.parsePresetXml(presetFile, premiereName);
-        if (definition) return definition;
-      } catch (parseError) {
-        PMB.log("BRIDGE_ERROR", "preset XML parse failed: " + parseError);
-      }
-    }
-  }
-  return null;
-};
-
-PMB.componentMatchesEffect = function (component, effect) {
-  var componentMatch = "";
-  var displayName = "";
-  try { componentMatch = String(component.matchName || ""); } catch (ignoreMatch) {}
-  try { displayName = String(component.displayName || ""); } catch (ignoreDisplay) {}
-  return componentMatch === effect.matchName || displayName === effect.displayName;
-};
-
-PMB.findComponentForEffect = function (clip, effect, minimumOccurrence) {
-  var occurrence = 0;
-  var fallback = null;
-  for (var i = 0; i < clip.components.numItems; i++) {
-    var component = clip.components[i];
-    if (PMB.componentMatchesEffect(component, effect)) {
-      fallback = component;
-      if (occurrence >= minimumOccurrence) return component;
-      occurrence++;
-    }
-  }
-  return fallback;
-};
-
-PMB.countComponentsForEffect = function (clip, effect) {
-  var count = 0;
-  for (var i = 0; i < clip.components.numItems; i++) {
-    if (PMB.componentMatchesEffect(clip.components[i], effect)) count++;
-  }
-  return count;
-};
-
-PMB.applyPresetParameter = function (property, parameter, effect, clip) {
-  if (!property) return;
-  if (parameter.timeVarying && parameter.keyframes.length) {
-    property.setTimeVarying(true);
-    var baseSeconds = Number(clip.inPoint.seconds);
-    for (var i = 0; i < parameter.keyframes.length; i++) {
-      var sourceTime = new Time();
-      sourceTime.seconds = baseSeconds + ((parameter.keyframes[i].ticks - effect.anchorInTicks) / PMB.TICKS_PER_SECOND);
-      try { property.addKey(sourceTime); } catch (ignoreAddKey) {}
-      property.setValueAtKey(sourceTime, parameter.keyframes[i].value, true);
-      try { property.setInterpolationTypeAtKey(sourceTime, parameter.keyframes[i].interpolation, true); } catch (ignoreInterpolation) {}
-    }
-  } else if (parameter.startValue !== null) {
-    property.setValue(parameter.startValue, true);
-  }
-};
-
-PMB.applySavedPresetDefinition = function (definition, seq, located, qeClip) {
-  for (var effectIndex = 0; effectIndex < definition.effects.length; effectIndex++) {
-    var effect = definition.effects[effectIndex];
-    var beforeCount = PMB.countComponentsForEffect(located.clip, effect);
-    var qeEffect = null;
-    try { qeEffect = qe.project.getVideoEffectByName(effect.displayName); } catch (ignoreDisplayLookup) {}
-    if (!qeEffect || String(qeEffect.name || "") !== effect.displayName) {
-      try { qeEffect = qe.project.getVideoEffectByName(effect.matchName); } catch (ignoreMatchLookup) {}
-    }
-    if (!qeEffect) throw new Error("base effect unavailable: " + effect.displayName + " (" + effect.matchName + ")");
-    qeClip.addVideoEffect(qeEffect);
-    var refreshed = seq.videoTracks[located.trackIndex].clips[located.clipIndex];
-    var component = PMB.findComponentForEffect(refreshed, effect, beforeCount);
-    if (!component) throw new Error("added component not found: " + effect.matchName);
-    for (var parameterIndex = 0; parameterIndex < effect.parameters.length; parameterIndex++) {
-      var parameter = effect.parameters[parameterIndex];
-      var property = null;
-      if (parameter.index < component.properties.numItems) property = component.properties[parameter.index];
-      if (!property && parameter.name) {
-        try { property = component.properties.getParamForDisplayName(parameter.name); } catch (ignorePropertyLookup) {}
-      }
-      PMB.applyPresetParameter(property, parameter, effect, refreshed);
-    }
-    located.clip = refreshed;
-  }
-};
-
-PMB.applyPreset = function (command) {
+PMB.applyEffect = function (command) {
   var seq = PMB.activeSequence();
   if (!seq) return PMB.fail("NO_ACTIVE_SEQUENCE");
-  var located = PMB.findSelectedVideoClip(seq);
+  var located = PMB.findSelectedVideoClip(seq, false);
   if (!located) return PMB.fail("NO_SELECTED_CLIP");
 
-  PMB.log("PRESET_SEARCH_START", command.premiereName);
-  try { app.enableQE(); } catch (qeEnableError) {
-    return PMB.fail("BRIDGE_ERROR", "QE enable failed: " + qeEnableError);
+  PMB.log("EFFECT_SEARCH_START", command.premiereName);
+  try { app.enableQE(); } catch (enableError) {
+    return PMB.fail("EFFECT_APPLY_FAILED", "QE unavailable: " + String(enableError));
   }
+  var effect = PMB.findQEVideoEffect(command.premiereName);
+  if (!effect) return PMB.fail("EFFECT_NOT_FOUND", command.premiereName);
+  PMB.log("EFFECT_FOUND", command.premiereName);
+
   var qeSeq;
-  try { qeSeq = qe.project.getActiveSequence(); } catch (qeSequenceError) {}
-  if (!qeSeq) return PMB.fail("NO_ACTIVE_SEQUENCE", "QE active sequence missing");
-  var qeTrack = qeSeq.getVideoTrackAt(located.trackIndex);
-  var qeClip = qeTrack && PMB.findQEClip(qeTrack, located.clip.start.ticks, located.clip.name);
-  if (!qeClip) return PMB.fail("BRIDGE_ERROR", "selected clip not found in QE DOM");
+  var qeTrack;
+  var qeClip;
+  try {
+    qeSeq = qe.project.getActiveSequence();
+    qeTrack = qeSeq.getVideoTrackAt(located.trackIndex);
+    qeClip = PMB.findQEClip(qeTrack, located.clip.start.ticks, located.clip.name);
+  } catch (locateError) {
+    return PMB.fail("EFFECT_APPLY_FAILED", "QE target lookup failed: " + String(locateError));
+  }
+  if (!qeClip) return PMB.fail("EFFECT_APPLY_FAILED", "QE target clip not found");
 
   var before = PMB.componentSnapshot(located.clip);
-  var preset = PMB.findQEPreset(command.premiereName);
-  var savedPreset = null;
-  if (!preset) savedPreset = PMB.findSavedPresetDefinition(command.premiereName);
-  if (!preset && !savedPreset) return PMB.fail("PRESET_NOT_FOUND", command.premiereName);
-  PMB.log("PRESET_FOUND", command.premiereName + (savedPreset ? " (.prfpset fallback)" : " (QE)"));
-
-  try {
-    if (preset) qeClip.addVideoEffect(preset);
-    else PMB.applySavedPresetDefinition(savedPreset, seq, located, qeClip);
-  } catch (applyError) {
-    return PMB.fail("BRIDGE_ERROR", "preset apply failed: " + applyError);
+  try { qeClip.addVideoEffect(effect); } catch (applyError) {
+    return PMB.fail("EFFECT_APPLY_FAILED", String(applyError));
   }
-  var refreshed = seq.videoTracks[located.trackIndex].clips[located.clipIndex];
-  var after = PMB.componentSnapshot(refreshed);
-  if (JSON.stringify(before) === JSON.stringify(after)) {
-    return PMB.fail("BRIDGE_ERROR", "QE accepted the preset call but clip state did not change");
+  var after = PMB.componentSnapshot(located.clip);
+  if (after.length <= before.length) {
+    return PMB.fail("EFFECT_APPLY_FAILED", "component count did not increase");
   }
-  PMB.log("PRESET_APPLIED", command.premiereName);
+  var beforeCounts = {};
+  var seenCounts = {};
+  var i;
+  for (i = 0; i < before.length; i++) {
+    var beforeKey = before[i].matchName || before[i].name;
+    beforeCounts[beforeKey] = (beforeCounts[beforeKey] || 0) + 1;
+  }
+  var added = null;
+  for (i = 0; i < after.length; i++) {
+    var afterKey = after[i].matchName || after[i].name;
+    seenCounts[afterKey] = (seenCounts[afterKey] || 0) + 1;
+    if (!added && seenCounts[afterKey] > (beforeCounts[afterKey] || 0)) added = after[i];
+  }
+  if (!added || added.name !== command.premiereName) {
+    return PMB.fail("EFFECT_APPLY_FAILED", "new component does not match " + command.premiereName);
+  }
+  PMB.log("EFFECT_APPLIED", command.premiereName);
   return {
     ok: true,
-    action: "applyPreset",
-    preset: command.premiereName,
+    action: "applyEffect",
+    effect: command.premiereName,
     sequence: seq.name,
     clip: located.clip.name,
     trackIndex: located.trackIndex,
-    before: before,
-    after: after,
+    addedComponent: added,
+    componentCountBefore: before.length,
+    componentCountAfter: after.length,
     events: PMB.events
   };
 };
@@ -420,6 +226,7 @@ PMB.findProjectItemByPath = function (root, mediaPath) {
   if (!root) return null;
   var children;
   try { children = root.children; } catch (ignoreChildren) { return null; }
+  if (!children) return null;
   for (var i = 0; i < children.numItems; i++) {
     var child = children[i];
     try {
@@ -464,13 +271,14 @@ PMB.findFirstFreeAudioTrackAtTime = function (seq, time, durationTicks) {
   for (var i = 0; i < seq.audioTracks.numTracks; i++) {
     if (PMB.trackIsFreeAtTime(seq.audioTracks[i], startTicks, durationTicks)) return i;
   }
-  try {
-    app.enableQE();
-    var qeSeq = qe.project.getActiveSequence();
-    var audioCount = seq.audioTracks.numTracks;
-    qeSeq.addTracks(0, seq.videoTracks.numTracks, 1, 1, audioCount, 0, 1);
-    if (seq.audioTracks.numTracks > audioCount) return audioCount;
-  } catch (ignoreAddTrack) {}
+  return -1;
+};
+
+PMB.findFirstFreeVideoTrackAtTime = function (seq, time, durationTicks) {
+  var startTicks = PMB.ticks(time);
+  for (var i = 0; i < seq.videoTracks.numTracks; i++) {
+    if (PMB.trackIsFreeAtTime(seq.videoTracks[i], startTicks, durationTicks)) return i;
+  }
   return -1;
 };
 
@@ -489,20 +297,20 @@ PMB.insertSfx = function (command) {
   } else {
     var imported = false;
     try { imported = app.project.importFiles([command.path], true, app.project.rootItem, false); } catch (ignoreImport) {}
-    if (!imported) return PMB.fail("IMPORT_FAILED", command.path);
+    if (!imported) return PMB.fail("SFX_IMPORT_FAILED", command.path);
     item = PMB.findProjectItemByPath(app.project.rootItem, command.path);
-    if (!item) return PMB.fail("IMPORT_FAILED", "import returned success but ProjectItem was not found");
+    if (!item) return PMB.fail("SFX_IMPORT_FAILED", "import returned success but ProjectItem was not found");
     PMB.log("SFX_IMPORTED", item.name);
   }
 
   var durationTicks = PMB.audioDurationTicks(item);
   var trackIndex = PMB.findFirstFreeAudioTrackAtTime(seq, playhead, durationTicks);
-  if (trackIndex < 0) return PMB.fail("NO_FREE_TRACK");
+  if (trackIndex < 0) return PMB.fail("NO_FREE_AUDIO_TRACK");
   PMB.log("FREE_AUDIO_TRACK_FOUND", "A" + (trackIndex + 1));
 
   var track = seq.audioTracks[trackIndex];
   try { track.overwriteClip(item, String(playheadTicks)); } catch (insertError) {
-    return PMB.fail("INSERT_FAILED", String(insertError));
+    return PMB.fail("SFX_INSERT_FAILED", String(insertError));
   }
 
   var inserted = null;
@@ -514,7 +322,7 @@ PMB.insertSfx = function (command) {
       } catch (ignoreVerify) {}
     }
   }
-  if (!inserted) return PMB.fail("INSERT_FAILED", "timeline verification failed");
+  if (!inserted) return PMB.fail("SFX_INSERT_FAILED", "timeline verification failed");
   PMB.log("SFX_INSERTED", inserted.name + " on A" + (trackIndex + 1));
   return {
     ok: true,
@@ -528,10 +336,59 @@ PMB.insertSfx = function (command) {
   };
 };
 
+PMB.insertMogrt = function (command) {
+  var seq = PMB.activeSequence();
+  if (!seq) return PMB.fail("NO_ACTIVE_SEQUENCE");
+  if (!command.path || !(new File(command.path)).exists) return PMB.fail("MOGRT_NOT_FOUND", command.path || "empty config path");
+
+  var durationSeconds = Number(command.durationSeconds || 0);
+  if (!(durationSeconds > 0)) return PMB.fail("MOGRT_INSERT_FAILED", "durationSeconds must be configured for collision-safe placement");
+  var durationTicks = Math.round(durationSeconds * PMB.TICKS_PER_SECOND);
+  var playhead = seq.getPlayerPosition();
+  var playheadTicks = PMB.ticks(playhead);
+  PMB.log("PLAYHEAD_TIME", playheadTicks);
+
+  var videoTrackIndex = PMB.findFirstFreeVideoTrackAtTime(seq, playhead, durationTicks);
+  if (videoTrackIndex < 0) return PMB.fail("NO_FREE_VIDEO_TRACK");
+  var audioTrackIndex = PMB.findFirstFreeAudioTrackAtTime(seq, playhead, durationTicks);
+  if (audioTrackIndex < 0) return PMB.fail("NO_FREE_AUDIO_TRACK", "no safe audio target for MOGRT");
+  PMB.log("FREE_VIDEO_TRACK_FOUND", "V" + (videoTrackIndex + 1));
+
+  var inserted;
+  try {
+    inserted = seq.importMGT(command.path, String(playheadTicks), videoTrackIndex, audioTrackIndex);
+  } catch (insertError) {
+    return PMB.fail("MOGRT_INSERT_FAILED", String(insertError));
+  }
+  if (!inserted) return PMB.fail("MOGRT_INSERT_FAILED", "Premiere returned no TrackItem");
+
+  var insertedStart = PMB.ticks(inserted.start);
+  if (insertedStart !== playheadTicks) {
+    return PMB.fail("MOGRT_INSERT_FAILED", "timeline verification failed: wrong start time");
+  }
+  var insertedDuration = PMB.ticks(inserted.end) - insertedStart;
+  if (insertedDuration > durationTicks) {
+    return PMB.fail("MOGRT_INSERT_FAILED", "inserted duration exceeds configured collision window");
+  }
+  PMB.log("MOGRT_INSERTED", inserted.name + " on V" + (videoTrackIndex + 1));
+  return {
+    ok: true,
+    action: "insertMogrt",
+    sequence: seq.name,
+    item: inserted.name,
+    videoTrackIndex: videoTrackIndex,
+    audioTrackIndex: audioTrackIndex,
+    playheadTicks: String(playheadTicks),
+    insertedStartTicks: String(inserted.start.ticks),
+    insertedEndTicks: String(inserted.end.ticks),
+    events: PMB.events
+  };
+};
+
 PMB.inspectSelectedClip = function () {
   var seq = PMB.activeSequence();
   if (!seq) return PMB.fail("NO_ACTIVE_SEQUENCE");
-  var located = PMB.findSelectedVideoClip(seq);
+  var located = PMB.findSelectedVideoClip(seq, false);
   if (!located) return PMB.fail("NO_SELECTED_CLIP");
   return {
     ok: true,
@@ -570,17 +427,6 @@ PMB.inspectTimeline = function () {
   return result;
 };
 
-PMB.inspectPreset = function (command) {
-  PMB.log("PRESET_SEARCH_START", command.premiereName);
-  try { app.enableQE(); } catch (error) { return PMB.fail("BRIDGE_ERROR", String(error)); }
-  var preset = PMB.findQEPreset(command.premiereName);
-  if (!preset) return PMB.fail("PRESET_NOT_FOUND", command.premiereName);
-  PMB.log("PRESET_FOUND", command.premiereName);
-  var name = command.premiereName;
-  try { name = String(preset.displayName || preset.name || command.premiereName); } catch (ignore) {}
-  return { ok: true, action: "inspectPreset", preset: name, events: PMB.events };
-};
-
 PMB.inspectProject = function () {
   var out = { ok: true, action: "inspectProject", sequences: [], projectItems: [] };
   var i, j, sequence, videoClips, audioClips;
@@ -614,11 +460,11 @@ PMB.dispatch = function (commandJson) {
   try {
     var command = JSON.parse(commandJson);
     var result;
-    if (command.action === "applyPreset") result = PMB.applyPreset(command);
+    if (command.action === "applyEffect") result = PMB.applyEffect(command);
     else if (command.action === "insertSfx") result = PMB.insertSfx(command);
+    else if (command.action === "insertMogrt") result = PMB.insertMogrt(command);
     else if (command.action === "inspectSelectedClip") result = PMB.inspectSelectedClip(command);
     else if (command.action === "inspectTimeline") result = PMB.inspectTimeline(command);
-    else if (command.action === "inspectPreset") result = PMB.inspectPreset(command);
     else if (command.action === "inspectProject") result = PMB.inspectProject(command);
     else result = PMB.fail("BRIDGE_ERROR", "unknown action: " + command.action);
     return JSON.stringify(result);

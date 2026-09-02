@@ -6,6 +6,7 @@
 @property(nonatomic, strong) NSDictionary<NSNumber *, NSDictionary *> *actions;
 @property(nonatomic, strong) NSURL *endpoint;
 @property(nonatomic, strong) NSURL *logURL;
+@property(nonatomic, strong) NSDictionary *config;
 - (instancetype)initWithConfigPath:(NSString *)configPath error:(NSError **)error;
 - (void)fire:(UInt32)numericID;
 @end
@@ -80,6 +81,7 @@ static UInt32 PMBModifiers(NSArray<NSString *> *names) {
     if (!data) return nil;
     NSDictionary *root = [NSJSONSerialization JSONObjectWithData:data options:0 error:error];
     if (![root isKindOfClass:NSDictionary.class]) return nil;
+    self.config = root;
 
     NSInteger port = [root[@"port"] integerValue] ?: 48777;
     self.endpoint = [NSURL URLWithString:[NSString stringWithFormat:@"http://127.0.0.1:%ld/action", (long)port]];
@@ -134,26 +136,34 @@ static UInt32 PMBModifiers(NSArray<NSString *> *names) {
     return self;
 }
 
-- (void)fire:(UInt32)numericID {
-    NSDictionary *mapped = self.actions[@(numericID)];
-    if (!mapped) return;
-    [self log:[NSString stringWithFormat:@"HOTKEY_FIRED %@:%@", mapped[@"action"], mapped[@"id"]]];
-
+- (void)postPayload:(NSDictionary *)payload completion:(void (^)(NSInteger, NSDictionary *, NSString *, NSError *))completion {
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:self.endpoint];
     request.HTTPMethod = @"POST";
     request.timeoutInterval = 10;
     [request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
-    request.HTTPBody = [NSJSONSerialization dataWithJSONObject:mapped options:0 error:nil];
+    request.HTTPBody = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
     [[NSURLSession.sharedSession dataTaskWithRequest:request
                                   completionHandler:^(NSData *data, NSURLResponse *response, NSError *requestError) {
+        NSInteger status = [(NSHTTPURLResponse *)response statusCode];
+        NSString *body = data ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] : @"";
+        NSDictionary *json = nil;
+        if (data) json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+        if (completion) completion(status, json, body ?: @"", requestError);
+    }] resume];
+}
+
+- (void)fire:(UInt32)numericID {
+    NSDictionary *mapped = self.actions[@(numericID)];
+    if (!mapped) return;
+    [self log:[NSString stringWithFormat:@"HOTKEY_FIRED %@:%@", mapped[@"action"], mapped[@"id"]]];
+    NSDictionary *payload = @{ @"action": mapped[@"action"], @"id": mapped[@"id"] };
+    [self postPayload:payload completion:^(NSInteger status, NSDictionary *json, NSString *body, NSError *requestError) {
         if (requestError) {
             [self log:[NSString stringWithFormat:@"BRIDGE_ERROR %@", requestError.localizedDescription]];
             return;
         }
-        NSInteger status = [(NSHTTPURLResponse *)response statusCode];
-        NSString *body = data ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] : @"";
         [self log:[NSString stringWithFormat:@"BRIDGE_RESPONSE status=%ld %@", (long)status, body ?: @""]];
-    }] resume];
+    }];
 }
 
 @end

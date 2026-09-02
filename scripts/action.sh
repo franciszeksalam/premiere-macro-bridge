@@ -4,7 +4,7 @@ set -euo pipefail
 ACTION="${1:-}"
 ID="${2:-}"
 if [[ -z "$ACTION" || -z "$ID" ]]; then
-  echo "usage: $0 applyPreset smoothZoom | insertSfx whoosh01" >&2
+  echo "usage: $0 applyEffect gaussianBlur | insertSfx whoosh01 | insertMogrt questionBox" >&2
   exit 64
 fi
 curl -sS --fail-with-body \

@@ -43,14 +43,14 @@
     if (!payload || typeof payload.action !== "string" || typeof payload.id !== "string") {
       throw new Error("BRIDGE_ERROR invalid payload; expected action and id");
     }
-    if (payload.action === "applyPreset") {
-      if (!config.presets || !config.presets[payload.id]) {
-        throw new Error("PRESET_NOT_FOUND unknown config id: " + payload.id);
+    if (payload.action === "applyEffect") {
+      if (!config.effects || !config.effects[payload.id]) {
+        throw new Error("EFFECT_NOT_FOUND unknown config id: " + payload.id);
       }
       return {
-        action: "applyPreset",
+        action: "applyEffect",
         id: payload.id,
-        premiereName: config.presets[payload.id].premiereName
+        premiereName: config.effects[payload.id].premiereName
       };
     }
     if (payload.action === "insertSfx") {
@@ -63,6 +63,17 @@
         path: config.sfx[payload.id].path || ""
       };
     }
+    if (payload.action === "insertMogrt") {
+      if (!config.mogrts || !config.mogrts[payload.id]) {
+        throw new Error("MOGRT_NOT_FOUND unknown config id: " + payload.id);
+      }
+      return {
+        action: "insertMogrt",
+        id: payload.id,
+        path: config.mogrts[payload.id].path || "",
+        durationSeconds: Number(config.mogrts[payload.id].durationSeconds || 0)
+      };
+    }
     if (payload.action === "inspectSelectedClip") {
       return { action: "inspectSelectedClip", id: payload.id };
     }
@@ -71,16 +82,6 @@
     }
     if (payload.action === "inspectProject") {
       return { action: "inspectProject", id: payload.id };
-    }
-    if (payload.action === "inspectPreset") {
-      if (!config.presets || !config.presets[payload.id]) {
-        throw new Error("PRESET_NOT_FOUND unknown config id: " + payload.id);
-      }
-      return {
-        action: "inspectPreset",
-        id: payload.id,
-        premiereName: config.presets[payload.id].premiereName
-      };
     }
     throw new Error("BRIDGE_ERROR unknown action: " + payload.action);
   }
