@@ -18,6 +18,17 @@ Saved user presets are intentionally out of scope. The active code does not pars
 
 Run `./scripts/list-actions.sh` for the current source of truth.
 
+## Configurator app
+
+`config.json` can be edited by hand, or through the local GUI in `configurator/`:
+
+```sh
+cd configurator && npm install && npm run dev
+```
+
+It edits this same `config.json`, runs the same `reload-config.sh`, and tests actions
+through the same `action.sh`. See [configurator/README.md](configurator/README.md).
+
 ## Install
 
 ```sh
@@ -153,7 +164,9 @@ The helper sends only `{ "actionId": "..." }`. The CEP bridge runs the central `
 ./scripts/test.sh
 ```
 
-Config schema, action registry, source guards, hotkey parity between the two parsers, and native validation of a deliberately broken config. No Premiere instance is needed.
+Config schema, action registry, source guards, hotkey parity between the two parsers, and
+native validation of a deliberately broken config. The configurator's own tests run too when
+its dependencies are installed. No Premiere instance is needed.
 
 ## Premiere behavior
 
