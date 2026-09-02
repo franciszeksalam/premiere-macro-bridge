@@ -20,6 +20,15 @@ elif [[ -d "$EXTENSION_DIR" && -f "$EXTENSION_DIR/CSXS/manifest.xml" ]]; then
     echo "Refusing to update a different extension: $EXTENSION_DIR" >&2
     exit 1
   fi
+  # The MVP installer copied the whole repository here. Premiere only needs
+  # index.html, CSXS, js, and jsx; the rest is stale and includes a legacy-schema
+  # config.json that is easy to mistake for the editable one.
+  for LEGACY in config.json README.md .gitignore com.local.premieremacrobridge.hotkeys.plist .build scripts tests mac-helper; do
+    if [[ -e "$EXTENSION_DIR/$LEGACY" ]]; then
+      rm -rf -- "$EXTENSION_DIR/$LEGACY"
+      echo "Removed stale installed copy: $LEGACY"
+    fi
+  done
 fi
 mkdir -p "$EXTENSION_DIR/CSXS" "$EXTENSION_DIR/js" "$EXTENSION_DIR/jsx"
 cp "$PROJECT_DIR/index.html" "$EXTENSION_DIR/index.html"

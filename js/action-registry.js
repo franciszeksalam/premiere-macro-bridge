@@ -49,6 +49,9 @@
     if (key === null) {
       return { ok: false, issue: issue("INVALID_ACTION_CONFIG", "hotkey requires one letter or digit") };
     }
+    if (!modifiers.ctrl && !modifiers.alt && !modifiers.cmd) {
+      return { ok: false, issue: issue("INVALID_ACTION_CONFIG", "hotkey requires at least one of ctrl, alt, or cmd") };
+    }
     var ordered = [];
     if (modifiers.ctrl) ordered.push("ctrl");
     if (modifiers.alt) ordered.push("alt");

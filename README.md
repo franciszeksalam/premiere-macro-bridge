@@ -24,7 +24,7 @@ Run `./scripts/list-actions.sh` for the current source of truth.
 ./scripts/install-local.sh
 ```
 
-Restart Premiere after changing CEP, JavaScript, or ExtendScript source. Editing only `config.json` requires no compilation and no Premiere restart:
+This rebuilds the helper, installs it, copies `index.html`, `CSXS`, `js`, and `jsx` into the CEP extension directory, and removes anything the MVP installer left there. Restart Premiere after changing CEP, JavaScript, or ExtendScript source. Editing only `config.json` requires no compilation and no Premiere restart:
 
 ```sh
 ./scripts/reload-config.sh
@@ -77,7 +77,7 @@ Requirements:
 - `sfx`: `type`, absolute existing `path`; optional `label`, `hotkey`.
 - `mogrt`: `type`, absolute existing `path`, positive `durationSeconds`; optional `label`, `hotkey`.
 
-Supported hotkey tokens are `ctrl`, `alt`, `shift`, and `cmd`, followed by one letter or digit. Parsing is case-insensitive. `control`, `option`, and `command` are accepted aliases. Examples:
+Supported hotkey tokens are `ctrl`, `alt`, `shift`, and `cmd`, followed by one letter or digit. Parsing is case-insensitive. `control`, `option`, and `command` are accepted aliases. At least one of `ctrl`, `alt`, or `cmd` is required: a bare key, or a `shift`-only combination, would be captured system-wide and would stop that key from typing anywhere. Examples:
 
 - `ctrl+alt+4`
 - `ctrl+alt+shift+1`
@@ -86,6 +86,8 @@ Supported hotkey tokens are `ctrl`, `alt`, `shift`, and `cmd`, followed by one l
 - `cmd+shift+7`
 
 Modifier order does not matter for conflict detection. If two actions resolve to the same combination, neither conflicting hotkey is registered. Invalid actions and missing files are logged and skipped; valid mappings remain active.
+
+The syntax is parsed twice, by `js/action-registry.js` and by the Carbon helper. `tests/hotkey-parity.test.js` drives both over the same inputs so the two cannot drift apart.
 
 ## Add an action
 
@@ -144,6 +146,14 @@ Every valid action can be tested without a hotkey:
 ```
 
 The helper sends only `{ "actionId": "..." }`. The CEP bridge runs the central `executeAction(actionId)` dispatcher, reads the matching config object, and selects the existing implementation by `type`.
+
+## Tests
+
+```sh
+./scripts/test.sh
+```
+
+Config schema, action registry, source guards, hotkey parity between the two parsers, and native validation of a deliberately broken config. No Premiere instance is needed.
 
 ## Premiere behavior
 

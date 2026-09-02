@@ -73,6 +73,10 @@ static NSDictionary *PMBParseHotkey(id value, NSString **reason) {
         if (reason) *reason = @"hotkey requires one letter or digit";
         return nil;
     }
+    if (![modifiers containsObject:@"ctrl"] && ![modifiers containsObject:@"alt"] && ![modifiers containsObject:@"cmd"]) {
+        if (reason) *reason = @"hotkey requires at least one of ctrl, alt, or cmd";
+        return nil;
+    }
     UInt32 flags = 0;
     NSMutableArray<NSString *> *canonical = [NSMutableArray array];
     if ([modifiers containsObject:@"ctrl"]) { flags |= controlKey; [canonical addObject:@"ctrl"]; }
