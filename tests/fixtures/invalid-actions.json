@@ -1,0 +1,29 @@
+{
+  "port": 48777,
+  "actions": {
+    "good": {
+      "type": "effect",
+      "premiereName": "Gaussian Blur",
+      "hotkey": "ctrl+alt+g"
+    },
+    "duplicateA": {
+      "type": "effect",
+      "premiereName": "Crop",
+      "hotkey": "ctrl+alt+q"
+    },
+    "duplicateB": {
+      "type": "effect",
+      "premiereName": "Transform",
+      "hotkey": "ALT+CTRL+Q"
+    },
+    "missing": {
+      "type": "sfx",
+      "path": "/definitely/missing/pmb-test.wav",
+      "hotkey": "ctrl+alt+m"
+    },
+    "unknown": {
+      "type": "transition",
+      "hotkey": "ctrl+alt+u"
+    }
+  }
+}

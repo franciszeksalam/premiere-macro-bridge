@@ -3,11 +3,10 @@
 #import <Foundation/Foundation.h>
 
 @interface PMBHotkeyBridge : NSObject
-@property(nonatomic, strong) NSDictionary<NSNumber *, NSDictionary *> *actions;
+@property(nonatomic, strong) NSDictionary<NSNumber *, NSString *> *actions;
 @property(nonatomic, strong) NSURL *endpoint;
 @property(nonatomic, strong) NSURL *logURL;
-@property(nonatomic, strong) NSDictionary *config;
-- (instancetype)initWithConfigPath:(NSString *)configPath error:(NSError **)error;
+- (instancetype)initWithConfigPath:(NSString *)configPath validateOnly:(BOOL)validateOnly error:(NSError **)error;
 - (void)fire:(UInt32)numericID;
 @end
 
@@ -41,16 +40,51 @@ static UInt32 PMBKeyCode(NSString *key) {
     return value ? value.unsignedIntValue : UINT32_MAX;
 }
 
-static UInt32 PMBModifiers(NSArray<NSString *> *names) {
-    UInt32 flags = 0;
-    for (NSString *rawName in names) {
-        NSString *name = rawName.lowercaseString;
-        if ([name isEqualToString:@"control"]) flags |= controlKey;
-        else if ([name isEqualToString:@"option"] || [name isEqualToString:@"alt"]) flags |= optionKey;
-        else if ([name isEqualToString:@"shift"]) flags |= shiftKey;
-        else if ([name isEqualToString:@"command"] || [name isEqualToString:@"cmd"]) flags |= cmdKey;
+static NSDictionary *PMBParseHotkey(id value, NSString **reason) {
+    if (![value isKindOfClass:NSString.class] || ![(NSString *)value length]) {
+        if (reason) *reason = @"hotkey must be a non-empty string";
+        return nil;
     }
-    return flags;
+    NSDictionary<NSString *, NSString *> *aliases = @{
+        @"ctrl": @"ctrl", @"control": @"ctrl",
+        @"alt": @"alt", @"option": @"alt",
+        @"shift": @"shift",
+        @"cmd": @"cmd", @"command": @"cmd"
+    };
+    NSMutableSet<NSString *> *modifiers = [NSMutableSet set];
+    NSString *key = nil;
+    for (NSString *rawToken in [(NSString *)value componentsSeparatedByString:@"+"]) {
+        NSString *token = [rawToken.lowercaseString stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+        NSString *modifier = aliases[token];
+        if (modifier) {
+            if ([modifiers containsObject:modifier]) {
+                if (reason) *reason = [NSString stringWithFormat:@"duplicate hotkey modifier: %@", token];
+                return nil;
+            }
+            [modifiers addObject:modifier];
+        } else if (token.length == 1 && PMBKeyCode(token) != UINT32_MAX && !key) {
+            key = token;
+        } else {
+            if (reason) *reason = [NSString stringWithFormat:@"unsupported hotkey token: %@", token];
+            return nil;
+        }
+    }
+    if (!key) {
+        if (reason) *reason = @"hotkey requires one letter or digit";
+        return nil;
+    }
+    UInt32 flags = 0;
+    NSMutableArray<NSString *> *canonical = [NSMutableArray array];
+    if ([modifiers containsObject:@"ctrl"]) { flags |= controlKey; [canonical addObject:@"ctrl"]; }
+    if ([modifiers containsObject:@"alt"]) { flags |= optionKey; [canonical addObject:@"alt"]; }
+    if ([modifiers containsObject:@"shift"]) { flags |= shiftKey; [canonical addObject:@"shift"]; }
+    if ([modifiers containsObject:@"cmd"]) { flags |= cmdKey; [canonical addObject:@"cmd"]; }
+    [canonical addObject:key];
+    return @{
+        @"keyCode": @(PMBKeyCode(key)),
+        @"modifiers": @(flags),
+        @"canonical": [canonical componentsJoinedByString:@"+"]
+    };
 }
 
 @implementation PMBHotkeyBridge
@@ -73,70 +107,150 @@ static UInt32 PMBModifiers(NSArray<NSString *> *names) {
     }
 }
 
-- (instancetype)initWithConfigPath:(NSString *)configPath error:(NSError **)error {
+- (BOOL)validateAction:(NSDictionary *)action actionID:(NSString *)actionID {
+    if (![action isKindOfClass:NSDictionary.class]) {
+        [self log:[NSString stringWithFormat:@"INVALID_ACTION_CONFIG actionId=%@ action must be an object", actionID]];
+        return NO;
+    }
+    NSString *type = action[@"type"];
+    if (![type isKindOfClass:NSString.class] ||
+        (!([type isEqualToString:@"effect"] || [type isEqualToString:@"sfx"] || [type isEqualToString:@"mogrt"]))) {
+        [self log:[NSString stringWithFormat:@"UNKNOWN_ACTION_TYPE actionId=%@ type=%@", actionID, type ?: @""]];
+        return NO;
+    }
+    if ([type isEqualToString:@"effect"]) {
+        NSString *name = action[@"premiereName"];
+        if (![name isKindOfClass:NSString.class] || !name.length) {
+            [self log:[NSString stringWithFormat:@"INVALID_ACTION_CONFIG actionId=%@ effect requires premiereName", actionID]];
+            return NO;
+        }
+        return YES;
+    }
+    NSString *path = action[@"path"];
+    if (![path isKindOfClass:NSString.class] || !path.length) {
+        [self log:[NSString stringWithFormat:@"INVALID_ACTION_CONFIG actionId=%@ %@ requires path", actionID, type]];
+        return NO;
+    }
+    if ([type isEqualToString:@"mogrt"] && [action[@"durationSeconds"] doubleValue] <= 0) {
+        [self log:[NSString stringWithFormat:@"INVALID_ACTION_CONFIG actionId=%@ mogrt requires durationSeconds > 0", actionID]];
+        return NO;
+    }
+    return YES;
+}
+
+- (instancetype)initWithConfigPath:(NSString *)configPath validateOnly:(BOOL)validateOnly error:(NSError **)error {
     self = [super init];
     if (!self) return nil;
 
-    NSData *data = [NSData dataWithContentsOfFile:configPath options:0 error:error];
-    if (!data) return nil;
-    NSDictionary *root = [NSJSONSerialization JSONObjectWithData:data options:0 error:error];
-    if (![root isKindOfClass:NSDictionary.class]) return nil;
-    self.config = root;
-
-    NSInteger port = [root[@"port"] integerValue] ?: 48777;
-    self.endpoint = [NSURL URLWithString:[NSString stringWithFormat:@"http://127.0.0.1:%ld/action", (long)port]];
     NSURL *logs = [NSFileManager.defaultManager.homeDirectoryForCurrentUser
                    URLByAppendingPathComponent:@"Library/Logs/PremiereMacroBridge" isDirectory:YES];
     [NSFileManager.defaultManager createDirectoryAtURL:logs withIntermediateDirectories:YES attributes:nil error:nil];
     self.logURL = [logs URLByAppendingPathComponent:@"hotkeys.log"];
 
-    EventTypeSpec eventType = {kEventClassKeyboard, kEventHotKeyPressed};
-    OSStatus handlerStatus = InstallEventHandler(GetApplicationEventTarget(), PMBHotkeyHandler, 1,
-                                                  &eventType, (__bridge void *)self, NULL);
-    if (handlerStatus != noErr) {
-        if (error) *error = [NSError errorWithDomain:@"PremiereMacroBridge" code:handlerStatus
-                                            userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"InstallEventHandler failed: %d", handlerStatus]}];
-        return nil;
-    }
-
-    NSArray *hotkeys = root[@"hotkeys"];
-    if (![hotkeys isKindOfClass:NSArray.class] || hotkeys.count == 0) {
+    NSData *data = [NSData dataWithContentsOfFile:configPath options:0 error:error];
+    if (!data) return nil;
+    NSDictionary *root = [NSJSONSerialization JSONObjectWithData:data options:0 error:error];
+    if (![root isKindOfClass:NSDictionary.class]) return nil;
+    NSDictionary *configuredActions = root[@"actions"];
+    if (![configuredActions isKindOfClass:NSDictionary.class]) {
         if (error) *error = [NSError errorWithDomain:@"PremiereMacroBridge" code:3
-                                            userInfo:@{NSLocalizedDescriptionKey: @"no hotkeys in config"}];
+                                            userInfo:@{NSLocalizedDescriptionKey: @"INVALID_ACTION_CONFIG config.actions must be an object"}];
         return nil;
     }
 
-    NSMutableDictionary *actions = [NSMutableDictionary dictionary];
+    NSInteger port = [root[@"port"] integerValue] ?: 48777;
+    self.endpoint = [NSURL URLWithString:[NSString stringWithFormat:@"http://127.0.0.1:%ld/action", (long)port]];
+
+    NSMutableArray<NSDictionary *> *candidates = [NSMutableArray array];
+    NSMutableDictionary<NSString *, NSMutableArray<NSString *> *> *owners = [NSMutableDictionary dictionary];
+    NSDictionary *runtimeValidation = root[@"runtimeValidation"];
+    NSDictionary *invalidActions = [runtimeValidation isKindOfClass:NSDictionary.class] ? runtimeValidation[@"invalidActions"] : nil;
+    NSArray<NSString *> *actionIDs = [configuredActions.allKeys sortedArrayUsingSelector:@selector(compare:)];
+    for (NSString *actionID in actionIDs) {
+        NSDictionary *action = configuredActions[actionID];
+        NSArray *runtimeIssues = [invalidActions isKindOfClass:NSDictionary.class] ? invalidActions[actionID] : nil;
+        if ([runtimeIssues isKindOfClass:NSArray.class] && runtimeIssues.count) {
+            for (NSDictionary *runtimeIssue in runtimeIssues) {
+                [self log:[NSString stringWithFormat:@"%@ actionId=%@ %@", runtimeIssue[@"code"] ?: @"INVALID_ACTION_CONFIG",
+                           actionID, runtimeIssue[@"message"] ?: @"invalid runtime action"]];
+            }
+            continue;
+        }
+        if (![self validateAction:action actionID:actionID]) continue;
+        id hotkeyValue = action[@"hotkey"];
+        if (!hotkeyValue || hotkeyValue == NSNull.null || ([hotkeyValue isKindOfClass:NSString.class] && ![(NSString *)hotkeyValue length])) {
+            [self log:[NSString stringWithFormat:@"ACTION_VALID_NO_HOTKEY actionId=%@", actionID]];
+            continue;
+        }
+        NSString *reason = nil;
+        NSDictionary *parsed = PMBParseHotkey(hotkeyValue, &reason);
+        if (!parsed) {
+            [self log:[NSString stringWithFormat:@"INVALID_ACTION_CONFIG actionId=%@ hotkey=%@ reason=%@", actionID, hotkeyValue, reason ?: @"invalid hotkey"]];
+            continue;
+        }
+        NSMutableArray<NSString *> *hotkeyOwners = owners[parsed[@"canonical"]];
+        if (!hotkeyOwners) {
+            hotkeyOwners = [NSMutableArray array];
+            owners[parsed[@"canonical"]] = hotkeyOwners;
+        }
+        [hotkeyOwners addObject:actionID];
+        [candidates addObject:@{ @"actionId": actionID, @"hotkey": parsed }];
+    }
+
+    NSMutableSet<NSString *> *conflicts = [NSMutableSet set];
+    for (NSString *canonical in owners) {
+        NSArray<NSString *> *hotkeyOwners = owners[canonical];
+        if (hotkeyOwners.count < 2) continue;
+        for (NSString *actionID in hotkeyOwners) {
+            [conflicts addObject:actionID];
+            [self log:[NSString stringWithFormat:@"DUPLICATE_HOTKEY actionId=%@ hotkey=%@ owners=%@",
+                       actionID, canonical, [hotkeyOwners componentsJoinedByString:@","]]];
+        }
+    }
+
+    if (!validateOnly) {
+        EventTypeSpec eventType = {kEventClassKeyboard, kEventHotKeyPressed};
+        OSStatus handlerStatus = InstallEventHandler(GetApplicationEventTarget(), PMBHotkeyHandler, 1,
+                                                      &eventType, (__bridge void *)self, NULL);
+        if (handlerStatus != noErr) {
+            if (error) *error = [NSError errorWithDomain:@"PremiereMacroBridge" code:handlerStatus
+                                                userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"InstallEventHandler failed: %d", handlerStatus]}];
+            return nil;
+        }
+    }
+
+    NSMutableDictionary<NSNumber *, NSString *> *registeredActions = [NSMutableDictionary dictionary];
     OSType signature = 'PMBH';
     UInt32 numericID = 1;
-    for (NSDictionary *spec in hotkeys) {
-        NSString *key = spec[@"key"];
-        NSString *action = spec[@"action"];
-        NSString *actionID = spec[@"id"];
-        UInt32 keyCode = PMBKeyCode(key ?: @"");
-        if (!action.length || !actionID.length || keyCode == UINT32_MAX) {
-            if (error) *error = [NSError errorWithDomain:@"PremiereMacroBridge" code:4
-                                                userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"invalid hotkey entry: %@", spec]}];
-            return nil;
+    for (NSDictionary *candidate in candidates) {
+        NSString *actionID = candidate[@"actionId"];
+        NSDictionary *hotkey = candidate[@"hotkey"];
+        if ([conflicts containsObject:actionID]) continue;
+        if (validateOnly) {
+            [self log:[NSString stringWithFormat:@"HOTKEY_VALID %@ -> %@", hotkey[@"canonical"], actionID]];
+            continue;
         }
         EventHotKeyID hotkeyID = {signature, numericID};
         EventHotKeyRef hotkeyRef = NULL;
-        OSStatus registerStatus = RegisterEventHotKey(keyCode, PMBModifiers(spec[@"modifiers"] ?: @[]),
-                                                      hotkeyID, GetApplicationEventTarget(), 0, &hotkeyRef);
+        OSStatus registerStatus = RegisterEventHotKey([hotkey[@"keyCode"] unsignedIntValue],
+                                                      [hotkey[@"modifiers"] unsignedIntValue], hotkeyID,
+                                                      GetApplicationEventTarget(), 0, &hotkeyRef);
         if (registerStatus != noErr) {
-            if (error) *error = [NSError errorWithDomain:@"PremiereMacroBridge" code:registerStatus
-                                                userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"RegisterEventHotKey %@ failed: %d", key, registerStatus]}];
-            return nil;
+            [self log:[NSString stringWithFormat:@"HOTKEY_REGISTRATION_FAILED actionId=%@ hotkey=%@ status=%d",
+                       actionID, hotkey[@"canonical"], registerStatus]];
+            continue;
         }
-        actions[@(numericID)] = @{ @"action": action, @"id": actionID };
-        [self log:[NSString stringWithFormat:@"HOTKEY_REGISTERED control+option+%@ -> %@:%@", key, action, actionID]];
+        registeredActions[@(numericID)] = actionID;
+        [self log:[NSString stringWithFormat:@"HOTKEY_REGISTERED %@ -> %@", hotkey[@"canonical"], actionID]];
         numericID++;
     }
-    self.actions = actions;
+    self.actions = registeredActions;
+    [self log:[NSString stringWithFormat:@"CONFIG_LOADED actions=%lu hotkeys=%lu",
+               (unsigned long)configuredActions.count, (unsigned long)(validateOnly ? candidates.count - conflicts.count : registeredActions.count)]];
     return self;
 }
 
-- (void)postPayload:(NSDictionary *)payload completion:(void (^)(NSInteger, NSDictionary *, NSString *, NSError *))completion {
+- (void)postPayload:(NSDictionary *)payload completion:(void (^)(NSInteger, NSString *, NSError *))completion {
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:self.endpoint];
     request.HTTPMethod = @"POST";
     request.timeoutInterval = 10;
@@ -146,23 +260,20 @@ static UInt32 PMBModifiers(NSArray<NSString *> *names) {
                                   completionHandler:^(NSData *data, NSURLResponse *response, NSError *requestError) {
         NSInteger status = [(NSHTTPURLResponse *)response statusCode];
         NSString *body = data ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] : @"";
-        NSDictionary *json = nil;
-        if (data) json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-        if (completion) completion(status, json, body ?: @"", requestError);
+        if (completion) completion(status, body ?: @"", requestError);
     }] resume];
 }
 
 - (void)fire:(UInt32)numericID {
-    NSDictionary *mapped = self.actions[@(numericID)];
-    if (!mapped) return;
-    [self log:[NSString stringWithFormat:@"HOTKEY_FIRED %@:%@", mapped[@"action"], mapped[@"id"]]];
-    NSDictionary *payload = @{ @"action": mapped[@"action"], @"id": mapped[@"id"] };
-    [self postPayload:payload completion:^(NSInteger status, NSDictionary *json, NSString *body, NSError *requestError) {
+    NSString *actionID = self.actions[@(numericID)];
+    if (!actionID) return;
+    [self log:[NSString stringWithFormat:@"HOTKEY_FIRED actionId=%@", actionID]];
+    [self postPayload:@{ @"actionId": actionID } completion:^(NSInteger status, NSString *body, NSError *requestError) {
         if (requestError) {
-            [self log:[NSString stringWithFormat:@"BRIDGE_ERROR %@", requestError.localizedDescription]];
+            [self log:[NSString stringWithFormat:@"BRIDGE_ERROR actionId=%@ %@", actionID, requestError.localizedDescription]];
             return;
         }
-        [self log:[NSString stringWithFormat:@"BRIDGE_RESPONSE status=%ld %@", (long)status, body ?: @""]];
+        [self log:[NSString stringWithFormat:@"BRIDGE_RESPONSE actionId=%@ status=%ld %@", actionID, (long)status, body ?: @""]];
     }];
 }
 
@@ -173,15 +284,18 @@ int main(int argc, const char *argv[]) {
         NSArray<NSString *> *arguments = NSProcessInfo.processInfo.arguments;
         NSUInteger flag = [arguments indexOfObject:@"--config"];
         if (flag == NSNotFound || flag + 1 >= arguments.count) {
-            fprintf(stderr, "usage: premiere-macro-hotkeys --config /absolute/path/config.json\n");
+            fprintf(stderr, "usage: premiere-macro-hotkeys --config /absolute/path/config.json [--check-config]\n");
             return 64;
         }
+        BOOL validateOnly = [arguments containsObject:@"--check-config"];
         NSError *error = nil;
-        PMBHotkeyBridge *bridge = [[PMBHotkeyBridge alloc] initWithConfigPath:arguments[flag + 1] error:&error];
+        PMBHotkeyBridge *bridge = [[PMBHotkeyBridge alloc] initWithConfigPath:arguments[flag + 1]
+                                                                 validateOnly:validateOnly error:&error];
         if (!bridge) {
             fprintf(stderr, "BRIDGE_ERROR %s\n", error.localizedDescription.UTF8String);
             return 1;
         }
+        if (validateOnly) return 0;
         NSApplication *application = [NSApplication sharedApplication];
         [application setActivationPolicy:NSApplicationActivationPolicyAccessory];
         [application run];

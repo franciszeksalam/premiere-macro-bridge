@@ -1,45 +1,34 @@
 {
   "port": 48777,
-  "effects": {
+  "actions": {
     "gaussianBlur": {
-      "premiereName": "Gaussian Blur"
+      "type": "effect",
+      "label": "Gaussian Blur",
+      "premiereName": "Gaussian Blur",
+      "hotkey": "ctrl+alt+1"
+    },
+    "whoosh01": {
+      "type": "sfx",
+      "label": "Camera Flash Charge",
+      "path": "/Users/apple/Desktop/Aperture-Ocular-Sounds/Aperture - Singular/Charge/COMCam_CHARGE-Camera Electronic Flash Charge 01_Ocular_Aperture.wav",
+      "hotkey": "ctrl+alt+2"
+    },
+    "questionBox": {
+      "type": "mogrt",
+      "label": "Video Thumbnail + Title",
+      "path": "/Users/apple/Downloads/MOGRT_MOGRT_Animacje_Video Thumbnail + Title.mogrt",
+      "durationSeconds": 15,
+      "hotkey": "ctrl+alt+3"
     },
     "transform": {
+      "type": "effect",
+      "label": "Transform",
       "premiereName": "Transform"
     },
     "crop": {
+      "type": "effect",
+      "label": "Crop",
       "premiereName": "Crop"
     }
-  },
-  "sfx": {
-    "whoosh01": {
-      "path": "/Users/apple/Desktop/Aperture-Ocular-Sounds/Aperture - Singular/Charge/COMCam_CHARGE-Camera Electronic Flash Charge 01_Ocular_Aperture.wav"
-    }
-  },
-  "mogrts": {
-    "questionBox": {
-      "path": "/Users/apple/Downloads/MOGRT_MOGRT_Animacje_Video Thumbnail + Title.mogrt",
-      "durationSeconds": 15
-    }
-  },
-  "hotkeys": [
-    {
-      "key": "1",
-      "modifiers": ["control", "option"],
-      "action": "applyEffect",
-      "id": "gaussianBlur"
-    },
-    {
-      "key": "2",
-      "modifiers": ["control", "option"],
-      "action": "insertSfx",
-      "id": "whoosh01"
-    },
-    {
-      "key": "3",
-      "modifiers": ["control", "option"],
-      "action": "insertMogrt",
-      "id": "questionBox"
-    }
-  ]
+  }
 }

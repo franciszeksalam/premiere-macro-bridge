@@ -5,6 +5,7 @@
   var http = require("http");
   var path = require("path");
   var url = require("url");
+  var ActionRegistry = window.PMBActionRegistry;
   var configPath = "/Users/apple/Documents/GitHub/premiere-macro-bridge/config.json";
   var logDir = path.join(process.env.HOME || "/tmp", "Library", "Logs", "PremiereMacroBridge");
   var logPath = path.join(logDir, "cep.log");
@@ -39,51 +40,17 @@
     return String(address || "").replace(/^::ffff:/, "");
   }
 
-  function resolveAction(payload, config) {
-    if (!payload || typeof payload.action !== "string" || typeof payload.id !== "string") {
-      throw new Error("BRIDGE_ERROR invalid payload; expected action and id");
+  function executeAction(actionId, config) {
+    if (!ActionRegistry) {
+      var missingRegistry = new Error("action registry did not load");
+      missingRegistry.code = "BRIDGE_ERROR";
+      throw missingRegistry;
     }
-    if (payload.action === "applyEffect") {
-      if (!config.effects || !config.effects[payload.id]) {
-        throw new Error("EFFECT_NOT_FOUND unknown config id: " + payload.id);
-      }
-      return {
-        action: "applyEffect",
-        id: payload.id,
-        premiereName: config.effects[payload.id].premiereName
-      };
-    }
-    if (payload.action === "insertSfx") {
-      if (!config.sfx || !config.sfx[payload.id]) {
-        throw new Error("SFX_NOT_FOUND unknown config id: " + payload.id);
-      }
-      return {
-        action: "insertSfx",
-        id: payload.id,
-        path: config.sfx[payload.id].path || ""
-      };
-    }
-    if (payload.action === "insertMogrt") {
-      if (!config.mogrts || !config.mogrts[payload.id]) {
-        throw new Error("MOGRT_NOT_FOUND unknown config id: " + payload.id);
-      }
-      return {
-        action: "insertMogrt",
-        id: payload.id,
-        path: config.mogrts[payload.id].path || "",
-        durationSeconds: Number(config.mogrts[payload.id].durationSeconds || 0)
-      };
-    }
-    if (payload.action === "inspectSelectedClip") {
-      return { action: "inspectSelectedClip", id: payload.id };
-    }
-    if (payload.action === "inspectTimeline") {
-      return { action: "inspectTimeline", id: payload.id };
-    }
-    if (payload.action === "inspectProject") {
-      return { action: "inspectProject", id: payload.id };
-    }
-    throw new Error("BRIDGE_ERROR unknown action: " + payload.action);
+    return ActionRegistry.commandForAction(config, actionId, { checkFiles: true });
+  }
+
+  function errorCode(error) {
+    return error && error.code ? error.code : "BRIDGE_ERROR";
   }
 
   function evalInPremiere(command, callback) {
@@ -116,21 +83,28 @@
       try {
         var config = readConfig();
         var payload = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-        var command = resolveAction(payload, config);
-        log("ACTION_RECEIVED", command.action + " " + command.id);
+        if (!payload || typeof payload.actionId !== "string" || !payload.actionId) {
+          var payloadError = new Error("expected non-empty actionId");
+          payloadError.code = "INVALID_ACTION_CONFIG";
+          throw payloadError;
+        }
+        var command = executeAction(payload.actionId, config);
+        log("ACTION_RECEIVED", command.actionId + " type=" + command.type);
         evalInPremiere(command, function (error, result) {
           if (error) {
             log("BRIDGE_ERROR", error.message);
             sendJson(response, 500, { ok: false, error: "BRIDGE_ERROR", message: error.message });
             return;
           }
+          if (result) result.actionId = command.actionId;
           var status = result && result.ok ? 200 : 409;
           log(result && result.ok ? "ACTION_OK" : "ACTION_FAILED", JSON.stringify(result));
           sendJson(response, status, result || { ok: false, error: "BRIDGE_ERROR" });
         });
       } catch (error) {
-        log("BRIDGE_ERROR", error.message);
-        sendJson(response, 400, { ok: false, error: "BRIDGE_ERROR", message: error.message });
+        var code = errorCode(error);
+        log(code, error.message);
+        sendJson(response, code === "UNKNOWN_ACTION" ? 404 : 400, { ok: false, error: code, message: error.message });
       }
     });
   }
@@ -143,6 +117,14 @@
       log("BRIDGE_ERROR", "cannot read config: " + error.message);
       return;
     }
+    if (!ActionRegistry) {
+      log("BRIDGE_ERROR", "action registry did not load");
+      return;
+    }
+    var validation = ActionRegistry.validateConfig(config, { checkFiles: true });
+    validation.issues.forEach(function (configIssue) {
+      log(configIssue.code, (configIssue.actionId ? configIssue.actionId + " " : "") + configIssue.message);
+    });
     server = http.createServer(function (request, response) {
       var remote = normalizeAddress(request.socket && request.socket.remoteAddress);
       if (remote !== "127.0.0.1" && remote !== "::1") {

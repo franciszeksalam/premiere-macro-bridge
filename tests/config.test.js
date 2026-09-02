@@ -5,15 +5,16 @@ const path = require("path");
 const root = path.resolve(__dirname, "..");
 const config = JSON.parse(fs.readFileSync(path.join(root, "config.json"), "utf8"));
 assert.strictEqual(config.port, 48777);
-assert.strictEqual(config.effects.gaussianBlur.premiereName, "Gaussian Blur");
-assert.strictEqual(config.effects.transform.premiereName, "Transform");
-assert.strictEqual(config.effects.crop.premiereName, "Crop");
-assert.ok(config.sfx.whoosh01.path.endsWith(".wav"));
-assert.ok(config.mogrts.questionBox.path.endsWith(".mogrt"));
-assert.strictEqual(config.mogrts.questionBox.durationSeconds, 15);
-assert.deepStrictEqual(config.hotkeys.map((x) => [x.key, x.action, x.id]), [
-  ["1", "applyEffect", "gaussianBlur"],
-  ["2", "insertSfx", "whoosh01"],
-  ["3", "insertMogrt", "questionBox"]
-]);
+assert.strictEqual(config.actions.gaussianBlur.type, "effect");
+assert.strictEqual(config.actions.gaussianBlur.premiereName, "Gaussian Blur");
+assert.strictEqual(config.actions.gaussianBlur.hotkey, "ctrl+alt+1");
+assert.strictEqual(config.actions.transform.premiereName, "Transform");
+assert.strictEqual(config.actions.transform.hotkey, undefined);
+assert.strictEqual(config.actions.crop.premiereName, "Crop");
+assert.strictEqual(config.actions.crop.hotkey, undefined);
+assert.ok(config.actions.whoosh01.path.endsWith(".wav"));
+assert.strictEqual(config.actions.whoosh01.hotkey, "ctrl+alt+2");
+assert.ok(config.actions.questionBox.path.endsWith(".mogrt"));
+assert.strictEqual(config.actions.questionBox.durationSeconds, 15);
+assert.strictEqual(config.actions.questionBox.hotkey, "ctrl+alt+3");
 console.log("config.test.js OK");
